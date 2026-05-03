@@ -1,0 +1,2100 @@
+---
+title: "HundrEd Spatial Network Analysis Paper 2026"
+output: html_notebook
+---
+Load packages and set up the environment for the spatial network analysis of the HundrEd dataset. This includes loading necessary libraries for data manipulation, spatial analysis, and network visualization. Additionally, we set a default theme for plotting to ensure consistency in visualizations throughout the analysis.
+```{r}
+# -----------------------------
+# 0. Packages
+# -----------------------------
+packages <- c(
+  "readr", "readxl", "dplyr", "tidyr", "stringr", "janitor",
+  "purrr", "forcats", "sf", "tmap",
+  "igraph", "tidygraph", "ggraph", "sfnetworks", "ggplot2", 
+  "countrycode", "rnaturalearth", "rnaturalearthdata", 
+  "ggspatial", "viridis", "spdep"
+)
+
+installed <- packages %in% rownames(installed.packages())
+if (any(!installed)) install.packages(packages[!installed])
+
+invisible(lapply(packages, library, character.only = TRUE))
+
+# Optional plotting defaults
+theme_set(ggplot2::theme_minimal())
+```
+
+Load the data from the specified paths. We define the paths to the datasets for innovations, partner organizations, and spatial network analysis (SNA) data. We also create an output directory for storing results and visualizations generated during the analysis.
+```{r}
+# =========================================================
+# 1. Detect OS and set base path
+# =========================================================
+
+sys <- Sys.info()[["sysname"]]
+
+if (sys == "Windows") {
+  
+  base_path <- "C:/Users/moaaz/Indiana University/O365-[Sec] BL-PhD-ELPS - Documents/Dissertation/SNA+GIS preliminary paper and work"
+  
+} else if (sys == "Darwin") {   # Mac
+  
+  base_path <- "/Users/syhamid/Library/CloudStorage/OneDrive-SharedLibraries-IndianaUniversity/O365-[Sec] BL-PhD-ELPS - Documents/Dissertation/SNA+GIS preliminary paper and work"
+  
+} else {
+  
+  stop("Unsupported operating system.")
+}
+
+cat("Using base path:\n", base_path, "\n")
+
+# Verify folder exists
+if (!dir.exists(base_path)) {
+  stop("Base path not found. Check your directory.")
+}
+
+# List files in the folder
+list.files(base_path)
+
+# =========================================================
+# 2. File paths
+# =========================================================
+
+innov_file   <- file.path(base_path, "HundrED innovations 2024.csv")
+partner_file <- file.path(base_path, "HundrED partner organizations.csv")
+sna_file     <- file.path(base_path, "HundrED SNA Data.xlsx")
+
+# Verify files exist
+file.exists(innov_file)
+file.exists(partner_file)
+file.exists(sna_file)
+
+# =========================================================
+# 3. Import datasets
+# =========================================================
+
+innov_raw <- readr::read_csv(
+  innov_file,
+  show_col_types = FALSE
+) |>
+  janitor::clean_names()
+
+partner_raw <- readr::read_csv(
+  partner_file,
+  show_col_types = FALSE
+) |>
+  janitor::clean_names()
+
+# Check workbook sheets
+sna_sheets <- readxl::excel_sheets(sna_file)
+print(sna_sheets)
+
+# Load workbook sheets
+individuals_raw <- readxl::read_excel(
+  sna_file,
+  sheet = "Individuals"
+) |>
+  janitor::clean_names()
+
+organizations_raw <- readxl::read_excel(
+  sna_file,
+  sheet = "Organizations"
+) |>
+  janitor::clean_names()
+
+innovations_sna_raw <- readxl::read_excel(
+  sna_file,
+  sheet = "100 global collection 2024"
+) |>
+  janitor::clean_names()
+
+academy_raw <- readxl::read_excel(
+  sna_file,
+  sheet = "Academy members"
+) |>
+  janitor::clean_names()
+
+# Quick checks
+dim(innov_raw)
+dim(partner_raw)
+dim(individuals_raw)
+dim(organizations_raw)
+dim(innovations_sna_raw)
+dim(academy_raw)
+```
+
+Review the structure and content of the loaded datasets systematically. This includes checking column names, data types, missing values, and distinct counts for key fields. This step is crucial for understanding the data and planning subsequent analysis steps effectively.
+```{r}
+# =========================================================
+# 3. Review workbook sheets systematically
+# =========================================================
+
+# Column names for workbook sheets
+names(individuals_raw)
+names(organizations_raw)
+names(innovations_sna_raw)
+names(academy_raw)
+
+# Quick structure check
+glimpse(individuals_raw)
+glimpse(organizations_raw)
+glimpse(innovations_sna_raw)
+glimpse(academy_raw)
+
+# Missingness summary
+colSums(is.na(individuals_raw))
+colSums(is.na(organizations_raw))
+colSums(is.na(innovations_sna_raw))
+colSums(is.na(academy_raw))
+
+# Distinct counts for key fields
+innovations_sna_raw |>
+  summarise(
+    n_rows = n(),
+    n_innovations = n_distinct(name_of_innovation),
+    n_origins = n_distinct(area_of_origin),
+    n_actor_types = n_distinct(type_of_actor),
+    n_intervention_areas = n_distinct(area_of_intervention)
+  )
+
+organizations_raw |>
+  summarise(
+    n_rows = n(),
+    n_orgs = n_distinct(organization_name),
+    n_org_types = n_distinct(type_of_organization),
+    n_recoded_org_types = n_distinct(recoded_types_of_organization),
+    n_partner_types = n_distinct(type_of_partner),
+    n_recoded_partner_types = n_distinct(recoded_type_of_partner),
+    n_locations = n_distinct(location_of_origin)
+  )
+
+academy_raw |>
+  summarise(
+    n_rows = n(),
+    n_people = n_distinct(full_name),
+    n_countries = n_distinct(country),
+    n_roles = n_distinct(role)
+  )
+
+individuals_raw |>
+  summarise(
+    n_rows = n(),
+    n_people = n_distinct(name),
+    n_designations = n_distinct(designation),
+    n_expertise = n_distinct(professional_area_of_expertise)
+  )
+
+# =========================================================
+# 4. Compare CSVs to workbook sheets
+# =========================================================
+
+# Compare innovation names
+setdiff(innov_raw$name_of_innovation, innovations_sna_raw$name_of_innovation)
+setdiff(innovations_sna_raw$name_of_innovation, innov_raw$name_of_innovation)
+
+# Compare organization names
+setdiff(partner_raw$organization_name, organizations_raw$organization_name)
+setdiff(organizations_raw$organization_name, partner_raw$organization_name)
+
+# Compare shared columns
+intersect(names(partner_raw), names(organizations_raw))
+intersect(names(innov_raw), names(innovations_sna_raw))
+
+# Preview workbook-only columns
+setdiff(names(organizations_raw), names(partner_raw))
+setdiff(names(innovations_sna_raw), names(innov_raw))
+```
+
+Create a master innovation dataset by keeping all variables from the raw innovations CSV and lightly cleaning key text fields. This involves trimming whitespace and standardizing text formats for fields such as innovation name, originator, city, and intervention descriptions. This cleaned master dataset will serve as the basis for subsequent analysis and reshaping.
+```{r}
+# =========================================================
+# 5. Create master innovation dataset
+# Keep all variables, lightly clean key text fields
+# =========================================================
+
+innov_master <- innov_raw |>
+  dplyr::mutate(
+    innovation_id = dplyr::row_number(),
+    name_of_innovation = stringr::str_squish(name_of_innovation),
+    originator = stringr::str_squish(originator),
+    city = stringr::str_squish(city),
+    area_of_origin = stringr::str_squish(area_of_origin),
+    street_address = stringr::str_squish(street_address),
+    type_of_actor = stringr::str_squish(type_of_actor),
+    nuanced_toa = stringr::str_squish(nuanced_toa),
+    size_of_the_organization = stringr::str_squish(size_of_the_organization),
+    type_of_intervention = stringr::str_squish(type_of_intervention),
+    scale_of_intervention = stringr::str_squish(scale_of_intervention),
+    area_of_intervention = stringr::str_squish(area_of_intervention),
+    description_of_intervention = stringr::str_squish(description_of_intervention)
+  )
+
+# Quick inspection
+dim(innov_master)
+
+innov_master |>
+  dplyr::select(
+    innovation_id,
+    sr_no,
+    name_of_innovation,
+    originator,
+    city,
+    area_of_origin,
+    street_address,
+    year_established,
+    number_of_children_users,
+    number_of_countries
+  ) |>
+  head(10)
+
+# =========================================================
+# 6. Identify implementation-country columns
+# =========================================================
+
+impl_cols <- names(innov_master) |>
+  stringr::str_subset("^country_of_implementation_")
+
+length(impl_cols)
+head(impl_cols)
+tail(impl_cols)
+
+# =========================================================
+# 7. Create long innovation-implementation dataset
+# =========================================================
+
+innov_long <- innov_master |>
+  tidyr::pivot_longer(
+    cols = dplyr::all_of(impl_cols),
+    names_to = "implementation_slot",
+    values_to = "implementation_country"
+  ) |>
+  dplyr::mutate(
+    implementation_country = stringr::str_squish(as.character(implementation_country)),
+    implementation_country = dplyr::na_if(implementation_country, "")
+  ) |>
+  dplyr::filter(!is.na(implementation_country))
+
+# Quick inspection
+dim(innov_long)
+
+innov_long |>
+  dplyr::select(
+    innovation_id,
+    name_of_innovation,
+    originator,
+    city,
+    area_of_origin,
+    street_address,
+    implementation_country,
+    number_of_countries
+  ) |>
+  head(20)
+
+# =========================================================
+# 8. Validate reshaping against stated number_of_countries
+# =========================================================
+
+innov_country_check <- innov_long |>
+  dplyr::group_by(innovation_id, name_of_innovation, number_of_countries) |>
+  dplyr::summarise(
+    observed_implementation_count = dplyr::n_distinct(implementation_country),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    difference = observed_implementation_count - number_of_countries
+  )
+
+summary(innov_country_check$difference)
+
+innov_country_check |>
+  dplyr::filter(difference != 0) |>
+  head(20)
+
+```
+
+Inspect the geographic values in the area_of_origin and implementation_country fields before proceeding with cleaning and standardization. This step helps identify any inconsistencies, misspellings, or variations in country names that may need to be addressed to ensure accurate spatial analysis and mapping later on.
+```{r}
+# =========================================================
+# 9. Inspect geographic values before cleaning
+# =========================================================
+
+sort(unique(innov_long$area_of_origin))
+
+sort(unique(innov_long$implementation_country))
+
+# =========================================================
+# 10. Create directly observed innovation -> originator ties
+# =========================================================
+
+innovation_originator_ties <- innov_master |>
+  dplyr::select(
+    innovation_id,
+    name_of_innovation,
+    originator,
+    city,
+    area_of_origin,
+    street_address,
+    type_of_actor,
+    size_of_the_organization,
+    type_of_intervention,
+    scale_of_intervention,
+    area_of_intervention,
+    year_established,
+    number_of_children_users,
+    number_of_countries
+  ) |>
+  dplyr::filter(!is.na(originator), originator != "")
+
+dim(innovation_originator_ties)
+
+innovation_originator_ties |>
+  head(20)
+```
+
+Clean and standardize the implementation country names in the long innovation-implementation dataset. This involves trimming whitespace, removing punctuation artifacts, and standardizing common abbreviations to ensure consistency in country names for accurate spatial analysis and mapping.
+```{r}
+# =========================================================
+# 11. Clean implementation country names
+# =========================================================
+
+innov_long <- innov_long |>
+  dplyr::mutate(
+    
+    implementation_country = stringr::str_trim(implementation_country),
+    
+    # Remove punctuation artifacts
+    implementation_country = stringr::str_remove(implementation_country, "\\.$"),
+    
+    # Standardize common abbreviations
+    implementation_country = dplyr::case_when(
+      
+      implementation_country == "USA" ~ "United States",
+      implementation_country == "UK" ~ "United Kingdom",
+      implementation_country == "UAE" ~ "United Arab Emirates",
+      
+      implementation_country == "DR Congo" ~ "Democratic Republic of Congo",
+      implementation_country == "Republic of Congo" ~ "Democratic Republic of Congo",
+      
+      TRUE ~ implementation_country
+    )
+  )
+
+
+# =========================================================
+# 12. Remove "Global" implementation entries
+# =========================================================
+
+innov_long <- innov_long |>
+  dplyr::filter(implementation_country != "Global")
+
+# =========================================================
+# 13. Harmonize subnational units
+# =========================================================
+
+innov_long <- innov_long |>
+  dplyr::mutate(
+    
+    implementation_country = dplyr::case_when(
+      
+      implementation_country == "Goa" ~ "India",
+      implementation_country == "Northern Ireland" ~ "United Kingdom",
+      implementation_country == "Scotland" ~ "United Kingdom",
+      implementation_country == "Wales" ~ "United Kingdom",
+      
+      TRUE ~ implementation_country
+    )
+  )
+
+sort(unique(innov_long$implementation_country))
+length(unique(innov_long$implementation_country))
+
+# =========================================================
+# 17. Clean origin country names
+# =========================================================
+
+innov_long <- innov_long |>
+  dplyr::mutate(
+    area_of_origin = stringr::str_trim(area_of_origin),
+    area_of_origin = stringr::str_remove(area_of_origin, "\\.$"),
+    area_of_origin = dplyr::case_when(
+      area_of_origin == "USA" ~ "United States",
+      area_of_origin == "UK" ~ "United Kingdom",
+      area_of_origin == "UAE" ~ "United Arab Emirates",
+      area_of_origin == "DR Congo" ~ "Democratic Republic of Congo",
+      area_of_origin == "Republic of Congo" ~ "Democratic Republic of Congo",
+      TRUE ~ area_of_origin
+    )
+  )
+
+sort(unique(innov_long$area_of_origin))
+length(unique(innov_long$area_of_origin))
+```
+
+Create edges representing the diffusion of innovations from their origin countries to their implementation countries. This involves selecting relevant fields, filtering out entries with missing origin countries, and ensuring that only cross-country diffusion edges are retained for subsequent network analysis.
+```{r}
+# =========================================================
+# 14. Create origin → implementation diffusion edges (FULL)
+# =========================================================
+
+innovation_diffusion_edges_full <- innov_long |>
+  dplyr::select(
+    innovation_id,
+    name_of_innovation,
+    origin_country = area_of_origin,
+    implementation_country
+  ) |>
+  dplyr::filter(!is.na(origin_country))
+
+dim(innovation_diffusion_edges_full)
+
+innovation_diffusion_edges_full |>
+  head(20)
+
+# =========================================================
+# 15. Aggregate FULL country diffusion network
+# =========================================================
+
+country_diffusion_network_full <- innovation_diffusion_edges_full |>
+  dplyr::group_by(origin_country, implementation_country) |>
+  dplyr::summarise(
+    diffusion_count = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    domestic = origin_country == implementation_country
+  ) |>
+  dplyr::arrange(desc(diffusion_count))
+
+dim(country_diffusion_network_full)
+
+country_diffusion_network_full |>
+  head(20)
+
+# =========================================================
+# 16. Create CROSS-BORDER network
+# =========================================================
+
+country_diffusion_network_cross <- country_diffusion_network_full |>
+  dplyr::filter(origin_country != implementation_country)
+
+dim(country_diffusion_network_cross)
+
+country_diffusion_network_cross |>
+  head(20)
+
+# =========================================================
+# 17. Build node table
+# =========================================================
+
+country_nodes <- tibble::tibble(
+  country = sort(unique(c(
+    country_diffusion_network_full$origin_country,
+    country_diffusion_network_full$implementation_country
+  )))
+)
+
+nrow(country_nodes)
+
+head(country_nodes)
+```
+
+Network construction: Build directed graphs representing the diffusion of innovations between countries. We create two graphs: one representing the full diffusion network (including domestic diffusion) and another representing only cross-border diffusion. These graphs will be used for subsequent centrality analysis and visualization.
+```{r}
+# =========================================================
+# 18. Build FULL diffusion graph
+# =========================================================
+
+g_diffusion_full <- igraph::graph_from_data_frame(
+  d = country_diffusion_network_full,
+  vertices = country_nodes,
+  directed = TRUE
+)
+
+g_diffusion_full
+
+# =========================================================
+# 19. Build CROSS-BORDER diffusion graph
+# =========================================================
+
+g_diffusion_cross <- igraph::graph_from_data_frame(
+  d = country_diffusion_network_cross,
+  vertices = country_nodes,
+  directed = TRUE
+)
+
+g_diffusion_cross
+
+# =========================================================
+# 20. Function to compute centrality
+# =========================================================
+
+compute_centrality <- function(graph){
+
+  tibble::tibble(
+    
+    country = igraph::V(graph)$name,
+    
+    in_degree = igraph::degree(graph, mode = "in"),
+    
+    out_degree = igraph::degree(graph, mode = "out"),
+    
+    in_strength = igraph::strength(
+      graph,
+      mode = "in",
+      weights = igraph::E(graph)$diffusion_count
+    ),
+    
+    out_strength = igraph::strength(
+      graph,
+      mode = "out",
+      weights = igraph::E(graph)$diffusion_count
+    ),
+    
+    betweenness = igraph::betweenness(
+      graph,
+      directed = TRUE,
+      weights = NA
+    ),
+    
+    eigenvector = igraph::eigen_centrality(
+      graph,
+      directed = TRUE,
+      weights = igraph::E(graph)$diffusion_count
+    )$vector
+    
+  ) |>
+    
+  dplyr::mutate(
+    
+    diffusion_balance_degree =
+      out_degree - in_degree,
+    
+    diffusion_balance_strength =
+      out_strength - in_strength
+  )
+}
+
+# =========================================================
+# 21. Centrality FULL network
+# =========================================================
+
+centrality_full <- compute_centrality(g_diffusion_full)
+
+head(centrality_full)
+
+
+# =========================================================
+# 22. Centrality CROSS-BORDER network
+# =========================================================
+
+centrality_cross <- compute_centrality(g_diffusion_cross)
+
+head(centrality_cross)
+
+centrality_full |>
+  dplyr::arrange(desc(out_strength)) |>
+  head(15)
+
+centrality_cross |>
+  dplyr::arrange(desc(out_strength)) |>
+  head(15)
+
+# FULL network
+
+igraph::vcount(g_diffusion_full)
+igraph::ecount(g_diffusion_full)
+igraph::edge_density(g_diffusion_full)
+
+
+# CROSS BORDER network
+
+igraph::vcount(g_diffusion_cross)
+igraph::ecount(g_diffusion_cross)
+igraph::edge_density(g_diffusion_cross)
+```
+
+
+```{r}
+# =========================================================
+# 23. Prepare graph objects for visualization
+# =========================================================
+
+graph_full_tbl <- tidygraph::as_tbl_graph(g_diffusion_full)
+graph_cross_tbl <- tidygraph::as_tbl_graph(g_diffusion_cross)
+
+# Add exporter metric to cross-border graph
+graph_cross_export <- graph_cross_tbl |>
+  tidygraph::activate(nodes) |>
+  dplyr::mutate(
+    exports = centrality_cross$out_strength[
+      match(name, centrality_cross$country)
+    ]
+  )
+
+# Add brokerage metric to cross-border graph
+graph_cross_broker <- graph_cross_tbl |>
+  tidygraph::activate(nodes) |>
+  dplyr::mutate(
+    broker = centrality_cross$betweenness[
+      match(name, centrality_cross$country)
+    ]
+  )
+
+# =========================================================
+# Figure 1. Full diffusion network graph
+# =========================================================
+
+ggraph(graph_full_tbl, layout = "fr") +
+  geom_edge_link(
+    aes(width = diffusion_count),
+    alpha = 0.20,
+    colour = "grey65"
+  ) +
+  geom_node_point(
+    size = 3,
+    colour = "steelblue"
+  ) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 2.6
+  ) +
+  scale_edge_width(range = c(0.2, 1.5)) +
+  theme_void() +
+  ggtitle("Global Innovation Diffusion Network (Full)")
+
+# =========================================================
+# Figure 2. Cross-border diffusion network graph
+# =========================================================
+
+ggraph(graph_cross_tbl, layout = "fr") +
+  geom_edge_link(
+    aes(width = diffusion_count),
+    alpha = 0.25,
+    colour = "grey60"
+  ) +
+  geom_node_point(
+    size = 3,
+    colour = "darkred"
+  ) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 2.6
+  ) +
+  scale_edge_width(range = c(0.2, 1.5)) +
+  theme_void() +
+  ggtitle("Cross-Border Innovation Diffusion Network")
+
+# =========================================================
+# Figure 3. Exporter network
+# Node size = cross-border out_strength
+# =========================================================
+
+ggraph(graph_cross_export, layout = "fr") +
+  geom_edge_link(
+    aes(width = diffusion_count),
+    alpha = 0.20,
+    colour = "grey70"
+  ) +
+  geom_node_point(
+    aes(size = exports),
+    colour = "orange"
+  ) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 2.6
+  ) +
+  scale_edge_width(range = c(0.2, 1.2)) +
+  scale_size(range = c(2, 10)) +
+  theme_void() +
+  ggtitle("Global Innovation Exporters")
+
+# =========================================================
+# Figure 4. Brokerage network
+# Node size = cross-border betweenness
+# =========================================================
+
+ggraph(graph_cross_broker, layout = "fr") +
+  geom_edge_link(
+    aes(width = diffusion_count),
+    alpha = 0.18,
+    colour = "grey70"
+  ) +
+  geom_node_point(
+    aes(size = broker),
+    colour = "purple"
+  ) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 2.6
+  ) +
+  scale_edge_width(range = c(0.2, 1.2)) +
+  scale_size(range = c(2, 10)) +
+  theme_void() +
+  ggtitle("Innovation Brokerage Network")
+```
+
+Traditional Quantitative Descriptives: Generate summary statistics and frequency tables for key variables in the innovations and organizations datasets. This includes calculating means, medians, standard deviations, and counts for variables such as year established, number of users, number of countries, types of innovations, and organization types. These descriptive statistics provide a foundational understanding of the data before delving into network analysis.
+```{r}
+# =========================================================
+# TABLE 1: Innovation level descriptives
+# =========================================================
+
+innovation_table <- innov_raw |>
+  dplyr::summarise(
+    
+    innovations_total = dplyr::n(),
+    
+    year_established_mean =
+      mean(year_established, na.rm = TRUE),
+    
+    year_established_sd =
+      sd(year_established, na.rm = TRUE),
+    
+    users_mean =
+      mean(number_of_children_users, na.rm = TRUE),
+    
+    users_median =
+      median(number_of_children_users, na.rm = TRUE),
+    
+    countries_mean =
+      mean(number_of_countries, na.rm = TRUE),
+    
+    countries_median =
+      median(number_of_countries, na.rm = TRUE)
+    
+  )
+
+innovation_table
+
+# Distribution of innovation areas
+innovation_types <- innov_raw |>
+  dplyr::count(area_of_intervention, sort = TRUE)
+
+innovation_types
+
+# =========================================================
+# TABLE 2: Country-level descriptives
+# =========================================================
+
+# Innovations originating by country
+country_origin_stats <- innov_long |>
+  dplyr::group_by(area_of_origin) |>
+  dplyr::summarise(
+    innovations_originating =
+      dplyr::n_distinct(name_of_innovation),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(innovations_originating))
+
+country_origin_stats
+
+# Innovations adopted by country
+country_adoption_stats <- innov_long |>
+  dplyr::group_by(implementation_country) |>
+  dplyr::summarise(
+    innovations_adopted =
+      dplyr::n_distinct(name_of_innovation),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(innovations_adopted))
+
+country_adoption_stats
+
+# Diffusion reach by origin country
+country_diffusion_stats <- innov_long |>
+  dplyr::group_by(area_of_origin) |>
+  dplyr::summarise(
+    countries_reached =
+      dplyr::n_distinct(implementation_country),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(countries_reached))
+
+country_diffusion_stats
+
+# =========================================================
+# TABLE 3: Organization-level descriptives
+# =========================================================
+
+# Organization types
+organization_types <- organizations_raw |>
+  dplyr::count(type_of_organization, sort = TRUE)
+
+organization_types
+
+# Extract country from location_of_origin
+organizations_clean <- organizations_raw |>
+  dplyr::mutate(
+    country = stringr::str_trim(
+      stringr::str_extract(location_of_origin, "[^,]+$")
+    )
+  )
+
+# Organizations by country
+organization_country <- organizations_clean |>
+  dplyr::count(country, sort = TRUE)
+
+organization_country
+
+# Partners by type
+partner_types <- organizations_raw |>
+  dplyr::count(type_of_partner, sort = TRUE)
+
+partner_types
+
+```
+
+```{r}
+# =========================================================
+# 26. Prepare country-level spatial tables
+# =========================================================
+
+# Innovation origins
+origin_map_data <- innov_long |>
+  dplyr::group_by(area_of_origin) |>
+  dplyr::summarise(
+    innovations_originating = dplyr::n_distinct(name_of_innovation),
+    .groups = "drop"
+  ) |>
+  dplyr::rename(country = area_of_origin)
+
+# Innovation implementation / adoption
+adoption_map_data <- innov_long |>
+  dplyr::group_by(implementation_country) |>
+  dplyr::summarise(
+    innovations_adopted = dplyr::n_distinct(name_of_innovation),
+    .groups = "drop"
+  ) |>
+  dplyr::rename(country = implementation_country)
+
+# Diffusion reach by origin country
+reach_map_data <- innov_long |>
+  dplyr::group_by(area_of_origin) |>
+  dplyr::summarise(
+    countries_reached = dplyr::n_distinct(implementation_country),
+    .groups = "drop"
+  ) |>
+  dplyr::rename(country = area_of_origin)
+
+# Partner organizations by country
+organizations_clean <- organizations_raw |>
+  dplyr::mutate(
+    country = stringr::str_trim(
+      stringr::str_extract(location_of_origin, "[^,]+$")
+    )
+  )
+
+partner_map_data <- organizations_clean |>
+  dplyr::group_by(country) |>
+  dplyr::summarise(
+    partner_organizations = dplyr::n(),
+    .groups = "drop"
+  )
+
+# Quick checks
+head(origin_map_data)
+head(adoption_map_data)
+head(reach_map_data)
+head(partner_map_data)
+
+# =========================================================
+# 27. Add ISO3 country codes
+# =========================================================
+
+origin_map_data <- origin_map_data |>
+  dplyr::mutate(
+    iso3 = countrycode::countrycode(country, "country.name", "iso3c")
+  )
+
+adoption_map_data <- adoption_map_data |>
+  dplyr::mutate(
+    iso3 = countrycode::countrycode(country, "country.name", "iso3c")
+  )
+
+reach_map_data <- reach_map_data |>
+  dplyr::mutate(
+    iso3 = countrycode::countrycode(country, "country.name", "iso3c")
+  )
+
+partner_map_data <- partner_map_data |>
+  dplyr::mutate(
+    iso3 = countrycode::countrycode(country, "country.name", "iso3c")
+  )
+
+# Check unmatched countries
+origin_map_data |> dplyr::filter(is.na(iso3))
+adoption_map_data |> dplyr::filter(is.na(iso3))
+reach_map_data |> dplyr::filter(is.na(iso3))
+partner_map_data |> dplyr::filter(is.na(iso3))
+
+# =========================================================
+# 28. Load world map
+# =========================================================
+
+world <- rnaturalearth::ne_countries(
+  scale = "medium",
+  returnclass = "sf"
+)
+
+# Quick check
+world |> dplyr::select(admin, iso_a3) |> head()
+
+# =========================================================
+# 29. Join country statistics to world polygons
+# =========================================================
+
+world_origin <- world |>
+  dplyr::left_join(
+    origin_map_data,
+    by = c("iso_a3" = "iso3")
+  )
+
+world_adoption <- world |>
+  dplyr::left_join(
+    adoption_map_data,
+    by = c("iso_a3" = "iso3")
+  )
+
+world_reach <- world |>
+  dplyr::left_join(
+    reach_map_data,
+    by = c("iso_a3" = "iso3")
+  )
+
+world_partner <- world |>
+  dplyr::left_join(
+    partner_map_data,
+    by = c("iso_a3" = "iso3")
+  )
+```
+
+
+```{r}
+
+# =========================================================
+# 30. Prepare world map for tmap
+# =========================================================
+
+tmap_mode("plot")
+
+# Remove Antarctica
+world_plot <- world |>
+  dplyr::filter(admin != "Antarctica")
+
+# Rejoin the cleaned map data
+world_origin_plot <- world_plot |>
+  dplyr::left_join(origin_map_data, by = c("iso_a3" = "iso3"))
+
+world_adoption_plot <- world_plot |>
+  dplyr::left_join(adoption_map_data, by = c("iso_a3" = "iso3"))
+
+world_reach_plot <- world_plot |>
+  dplyr::left_join(reach_map_data, by = c("iso_a3" = "iso3"))
+
+world_partner_plot <- world_plot |>
+  dplyr::left_join(partner_map_data, by = c("iso_a3" = "iso3"))
+
+# =========================================================
+# 31. Create label layers (only countries with data)
+# =========================================================
+
+origin_labels <- world_origin_plot |>
+  dplyr::filter(!is.na(innovations_originating)) |>
+  dplyr::mutate(label_geom = sf::st_point_on_surface(geometry)) |>
+  sf::st_as_sf()
+
+adoption_labels <- world_adoption_plot |>
+  dplyr::filter(!is.na(innovations_adopted)) |>
+  dplyr::mutate(label_geom = sf::st_point_on_surface(geometry)) |>
+  sf::st_as_sf()
+
+reach_labels <- world_reach_plot |>
+  dplyr::filter(!is.na(countries_reached)) |>
+  dplyr::mutate(label_geom = sf::st_point_on_surface(geometry)) |>
+  sf::st_as_sf()
+
+partner_labels <- world_partner_plot |>
+  dplyr::filter(!is.na(partner_organizations)) |>
+  dplyr::mutate(label_geom = sf::st_point_on_surface(geometry)) |>
+  sf::st_as_sf()
+
+# Replace geometry with label points for plotting labels
+sf::st_geometry(origin_labels) <- origin_labels$label_geom
+sf::st_geometry(adoption_labels) <- adoption_labels$label_geom
+sf::st_geometry(reach_labels) <- reach_labels$label_geom
+sf::st_geometry(partner_labels) <- partner_labels$label_geom
+
+# =========================================================
+# 32. Shared helper function for clean maps
+# =========================================================
+
+make_tmap <- function(map_sf, label_sf, fill_var, palette_name, title_text, legend_title) {
+  
+  tm_shape(map_sf) +
+    tm_polygons(
+      col = fill_var,
+      palette = palette_name,
+      border.col = "grey75",
+      lwd = 0.5,
+      title = legend_title,
+      colorNA = "grey92",
+      textNA = "Missing"
+    ) +
+    tm_shape(label_sf) +
+    tm_text(
+      text = "admin",
+      size = 0.55,
+      col = "black",
+      shadow = TRUE,
+      remove.overlap = TRUE
+    ) +
+    tm_layout(
+      title = title_text,
+      title.position = c("left", "top"),
+      title.size = 1.5,
+      frame = FALSE,
+      bg.color = "white",
+      
+      # Reduce empty space and move title above map area
+      outer.margins = c(0.02, 0.02, 0.08, 0.02),
+      inner.margins = c(0.02, 0.02, 0.10, 0.02),
+      asp = 0,
+      
+      # Put legend inside lower-left blank area
+      legend.outside = FALSE,
+      legend.position = c("left", "bottom"),
+      legend.bg.color = "white",
+      legend.bg.alpha = 0.85,
+      legend.frame = TRUE,
+      legend.text.size = 0.8,
+      legend.title.size = 1.0
+    )
+}
+
+# =========================================================
+# 33. Map 1 - Innovation origins by country
+# =========================================================
+
+make_tmap(
+  map_sf       = world_origin_plot,
+  label_sf     = origin_labels,
+  fill_var     = "innovations_originating",
+  palette_name = "-plasma",
+  title_text   = "Innovation Origins by Country",
+  legend_title = "Innovations\noriginating"
+)
+
+# =========================================================
+# 34. Map 2 - Innovation adoption by country
+# =========================================================
+
+make_tmap(
+  map_sf       = world_adoption_plot,
+  label_sf     = adoption_labels,
+  fill_var     = "innovations_adopted",
+  palette_name = "-magma",
+  title_text   = "Innovation Adoption by Country",
+  legend_title = "Innovations\nadopted"
+)
+
+# =========================================================
+# 35. Map 3 - Diffusion reach by origin country
+# =========================================================
+
+make_tmap(
+  map_sf       = world_reach_plot,
+  label_sf     = reach_labels,
+  fill_var     = "countries_reached",
+  palette_name = "-cividis",
+  title_text   = "Diffusion Reach by Origin Country",
+  legend_title = "Countries\nreached"
+)
+
+# =========================================================
+# 36. Map 4 - Partner organizations by country
+# =========================================================
+
+make_tmap(
+  map_sf       = world_partner_plot,
+  label_sf     = partner_labels,
+  fill_var     = "partner_organizations",
+  palette_name = "-inferno",
+  title_text   = "Partner Organizations by Country",
+  legend_title = "Partner\norganizations"
+)
+```
+
+```{r}
+# =========================================================
+# 37. Prepare world data for spatial statistics
+# =========================================================
+
+tmap_mode("plot")
+
+# Use the cleaned world object without Antarctica
+world_stats <- world |>
+  dplyr::filter(admin != "Antarctica") |>
+  dplyr::select(admin, iso_a3, geometry)
+
+# Join all four variables to one spatial object
+world_stats <- world_stats |>
+  dplyr::left_join(origin_map_data |> dplyr::select(iso3, innovations_originating),
+                   by = c("iso_a3" = "iso3")) |>
+  dplyr::left_join(adoption_map_data |> dplyr::select(iso3, innovations_adopted),
+                   by = c("iso_a3" = "iso3")) |>
+  dplyr::left_join(reach_map_data |> dplyr::select(iso3, countries_reached),
+                   by = c("iso_a3" = "iso3")) |>
+  dplyr::left_join(partner_map_data |> dplyr::select(iso3, partner_organizations),
+                   by = c("iso_a3" = "iso3"))
+
+# Replace NA values with 0 so all countries are included
+world_stats <- world_stats |>
+  dplyr::mutate(
+    innovations_originating = dplyr::coalesce(innovations_originating, 0),
+    innovations_adopted = dplyr::coalesce(innovations_adopted, 0),
+    countries_reached = dplyr::coalesce(countries_reached, 0),
+    partner_organizations = dplyr::coalesce(partner_organizations, 0)
+  )
+
+# Quick check
+summary(world_stats$innovations_originating)
+summary(world_stats$innovations_adopted)
+summary(world_stats$countries_reached)
+summary(world_stats$partner_organizations)
+
+
+# =========================================================
+# 38. Build k-nearest-neighbor spatial weights
+# =========================================================
+
+# Use point-on-surface for robust country label/centroid locations
+world_points <- sf::st_point_on_surface(world_stats)
+
+# Transform to projected CRS for stable nearest-neighbor calculations
+world_points_proj <- sf::st_transform(world_points, 8857)  # Equal Earth projection
+coords <- sf::st_coordinates(world_points_proj)
+
+# Build 4-nearest-neighbor structure
+knn_4 <- spdep::knearneigh(coords, k = 4)
+nb_4 <- spdep::knn2nb(knn_4)
+
+# Row-standardized weights
+lw_4 <- spdep::nb2listw(nb_4, style = "W", zero.policy = TRUE)
+
+# Quick checks
+summary(nb_4)
+spdep::card(nb_4) |> summary()
+
+
+# =========================================================
+# 39. Global Moran's I
+# =========================================================
+
+moran_origins <- spdep::moran.test(
+  world_stats$innovations_originating,
+  lw_4,
+  zero.policy = TRUE
+)
+
+moran_adoption <- spdep::moran.test(
+  world_stats$innovations_adopted,
+  lw_4,
+  zero.policy = TRUE
+)
+
+moran_reach <- spdep::moran.test(
+  world_stats$countries_reached,
+  lw_4,
+  zero.policy = TRUE
+)
+
+moran_partners <- spdep::moran.test(
+  world_stats$partner_organizations,
+  lw_4,
+  zero.policy = TRUE
+)
+
+moran_origins
+moran_adoption
+moran_reach
+moran_partners
+
+
+# =========================================================
+# 40. Local Moran's I (LISA)
+# =========================================================
+
+local_moran_origins <- spdep::localmoran(
+  world_stats$innovations_originating,
+  lw_4,
+  zero.policy = TRUE
+)
+
+local_moran_adoption <- spdep::localmoran(
+  world_stats$innovations_adopted,
+  lw_4,
+  zero.policy = TRUE
+)
+
+local_moran_reach <- spdep::localmoran(
+  world_stats$countries_reached,
+  lw_4,
+  zero.policy = TRUE
+)
+
+local_moran_partners <- spdep::localmoran(
+  world_stats$partner_organizations,
+  lw_4,
+  zero.policy = TRUE
+)
+
+# Add results to spatial object
+world_stats <- world_stats |>
+  dplyr::mutate(
+    lisa_origins_I = local_moran_origins[, 1],
+    lisa_origins_p = local_moran_origins[, 5],
+    
+    lisa_adoption_I = local_moran_adoption[, 1],
+    lisa_adoption_p = local_moran_adoption[, 5],
+    
+    lisa_reach_I = local_moran_reach[, 1],
+    lisa_reach_p = local_moran_reach[, 5],
+    
+    lisa_partners_I = local_moran_partners[, 1],
+    lisa_partners_p = local_moran_partners[, 5]
+  )
+
+
+# =========================================================
+# 41. Classify LISA clusters
+# =========================================================
+
+# Helper function for Local Moran cluster classes
+make_lisa_cluster <- function(x, lag_x, pvals, alpha = 0.05) {
+  
+  dplyr::case_when(
+    pvals > alpha ~ "Not significant",
+    x > mean(x, na.rm = TRUE) & lag_x > mean(lag_x, na.rm = TRUE) ~ "High-High",
+    x < mean(x, na.rm = TRUE) & lag_x < mean(lag_x, na.rm = TRUE) ~ "Low-Low",
+    x > mean(x, na.rm = TRUE) & lag_x < mean(lag_x, na.rm = TRUE) ~ "High-Low",
+    x < mean(x, na.rm = TRUE) & lag_x > mean(lag_x, na.rm = TRUE) ~ "Low-High",
+    TRUE ~ "Not significant"
+  )
+}
+
+# Spatial lags
+lag_origins <- spdep::lag.listw(lw_4, world_stats$innovations_originating, zero.policy = TRUE)
+lag_adoption <- spdep::lag.listw(lw_4, world_stats$innovations_adopted, zero.policy = TRUE)
+lag_reach <- spdep::lag.listw(lw_4, world_stats$countries_reached, zero.policy = TRUE)
+lag_partners <- spdep::lag.listw(lw_4, world_stats$partner_organizations, zero.policy = TRUE)
+
+world_stats <- world_stats |>
+  dplyr::mutate(
+    lisa_cluster_origins =
+      make_lisa_cluster(innovations_originating, lag_origins, lisa_origins_p),
+    
+    lisa_cluster_adoption =
+      make_lisa_cluster(innovations_adopted, lag_adoption, lisa_adoption_p),
+    
+    lisa_cluster_reach =
+      make_lisa_cluster(countries_reached, lag_reach, lisa_reach_p),
+    
+    lisa_cluster_partners =
+      make_lisa_cluster(partner_organizations, lag_partners, lisa_partners_p)
+  )
+
+# Check counts
+table(world_stats$lisa_cluster_origins)
+table(world_stats$lisa_cluster_adoption)
+table(world_stats$lisa_cluster_reach)
+table(world_stats$lisa_cluster_partners)
+
+
+# =========================================================
+# 42. Getis-Ord hotspot analysis
+# =========================================================
+
+# localG requires self-included weights
+nb_self <- spdep::include.self(nb_4)
+lw_self <- spdep::nb2listw(nb_self, style = "W", zero.policy = TRUE)
+
+world_stats <- world_stats |>
+  dplyr::mutate(
+    hotspot_origins = as.numeric(spdep::localG(innovations_originating, lw_self, zero.policy = TRUE)),
+    hotspot_adoption = as.numeric(spdep::localG(innovations_adopted, lw_self, zero.policy = TRUE)),
+    hotspot_reach = as.numeric(spdep::localG(countries_reached, lw_self, zero.policy = TRUE)),
+    hotspot_partners = as.numeric(spdep::localG(partner_organizations, lw_self, zero.policy = TRUE))
+  )
+
+# Classify hot spots / cold spots
+world_stats <- world_stats |>
+  dplyr::mutate(
+    hotspot_class_origins = dplyr::case_when(
+      hotspot_origins >= 1.96 ~ "Hot spot",
+      hotspot_origins <= -1.96 ~ "Cold spot",
+      TRUE ~ "Not significant"
+    ),
+    
+    hotspot_class_adoption = dplyr::case_when(
+      hotspot_adoption >= 1.96 ~ "Hot spot",
+      hotspot_adoption <= -1.96 ~ "Cold spot",
+      TRUE ~ "Not significant"
+    ),
+    
+    hotspot_class_reach = dplyr::case_when(
+      hotspot_reach >= 1.96 ~ "Hot spot",
+      hotspot_reach <= -1.96 ~ "Cold spot",
+      TRUE ~ "Not significant"
+    ),
+    
+    hotspot_class_partners = dplyr::case_when(
+      hotspot_partners >= 1.96 ~ "Hot spot",
+      hotspot_partners <= -1.96 ~ "Cold spot",
+      TRUE ~ "Not significant"
+    )
+  )
+
+table(world_stats$hotspot_class_origins)
+table(world_stats$hotspot_class_adoption)
+table(world_stats$hotspot_class_reach)
+table(world_stats$hotspot_class_partners)
+
+
+# =========================================================
+# 43. Example LISA cluster maps
+# =========================================================
+
+tm_shape(world_stats) +
+  tm_polygons(
+    col = "lisa_cluster_adoption",
+    palette = c(
+      "High-High" = "#b2182b",
+      "Low-Low" = "#2166ac",
+      "High-Low" = "#ef8a62",
+      "Low-High" = "#67a9cf",
+      "Not significant" = "grey90"
+    ),
+    title = "LISA clusters\n(adoption)",
+    border.col = "grey75",
+    lwd = 0.3
+  ) +
+  tm_layout(
+    title = "Local Moran's I Clusters: Innovation Adoption",
+    title.position = c("left", "top"),
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+
+tm_shape(world_stats) +
+  tm_polygons(
+    col = "hotspot_class_adoption",
+    palette = c(
+      "Hot spot" = "#d7191c",
+      "Cold spot" = "#2c7bb6",
+      "Not significant" = "grey90"
+    ),
+    title = "Hot spots\n(adoption)",
+    border.col = "grey75",
+    lwd = 0.3
+  ) +
+  tm_layout(
+    title = "Getis-Ord Hot Spots: Innovation Adoption",
+    title.position = c("left", "top"),
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+```{r}
+# =========================================================
+# 44. SPATIAL NETWORK ANALYSIS — DIFFUSION FLOWS
+# =========================================================
+
+# =========================================================
+# 44.1 Convert country names to ISO3 codes (edges)
+# =========================================================
+
+edges_iso <- country_diffusion_network_full |>
+  dplyr::mutate(
+    origin_iso3 = countrycode::countrycode(
+      origin_country, "country.name", "iso3c"
+    ),
+    dest_iso3 = countrycode::countrycode(
+      implementation_country, "country.name", "iso3c"
+    )
+  )
+
+# --- ISO diagnostics (printed)
+
+edges_iso |>
+  dplyr::summarise(
+    missing_origin_iso = sum(is.na(origin_iso3)),
+    missing_dest_iso   = sum(is.na(dest_iso3))
+  ) |>
+  print()
+
+edges_iso |>
+  dplyr::filter(is.na(origin_iso3) | is.na(dest_iso3)) |>
+  dplyr::distinct(origin_country, implementation_country) |>
+  print(n = 20)
+
+
+# =========================================================
+# 44.2 Standardize ISO codes in world dataset (CRITICAL FIX)
+# =========================================================
+
+world <- world |>
+  dplyr::mutate(
+    iso3_clean = countrycode::countrycode(
+      admin, "country.name", "iso3c"
+    )
+  )
+
+# --- Verify key countries (France, Norway)
+
+world |>
+  dplyr::filter(admin %in% c("France", "Norway")) |>
+  dplyr::select(admin, iso_a3, iso3_clean) |>
+  print()
+
+
+# =========================================================
+# 44.3 Create country centroids (correct CRS handling)
+# =========================================================
+
+world_proj <- sf::st_transform(world, 8857)
+
+centroids_proj <- sf::st_point_on_surface(world_proj)
+
+world_centroids <- sf::st_transform(centroids_proj, 4326)
+
+coords <- sf::st_coordinates(world_centroids)
+
+world_centroids <- world_centroids |>
+  dplyr::mutate(
+    lon = coords[,1],
+    lat = coords[,2]
+  )
+
+# --- Validate centroid completeness
+
+stopifnot(
+  all(!is.na(world_centroids$lon)),
+  all(!is.na(world_centroids$lat))
+)
+
+
+# =========================================================
+# 44.4 Attach centroid coordinates + diagnostics
+# =========================================================
+
+edges_geo <- edges_iso |>
+  dplyr::left_join(
+    world_centroids |> dplyr::select(iso3_clean, lon, lat),
+    by = c("origin_iso3" = "iso3_clean")
+  ) |>
+  dplyr::rename(
+    lon_origin = lon,
+    lat_origin = lat
+  ) |>
+  dplyr::left_join(
+    world_centroids |> dplyr::select(iso3_clean, lon, lat),
+    by = c("dest_iso3" = "iso3_clean")
+  ) |>
+  dplyr::rename(
+    lon_dest = lon,
+    lat_dest = lat
+  )
+
+# --- Summary diagnostics
+
+coord_summary <- edges_geo |>
+  dplyr::summarise(
+    total_edges        = dplyr::n(),
+    missing_lon_origin = sum(is.na(lon_origin)),
+    missing_lat_origin = sum(is.na(lat_origin)),
+    missing_lon_dest   = sum(is.na(lon_dest)),
+    missing_lat_dest   = sum(is.na(lat_dest))
+  )
+
+print(coord_summary)
+
+
+# --- Problematic rows
+
+missing_coords <- edges_geo |>
+  dplyr::filter(
+    is.na(lon_origin) | is.na(lat_origin) |
+    is.na(lon_dest)   | is.na(lat_dest)
+  )
+
+cat("\nNumber of problematic edges:", nrow(missing_coords), "\n")
+
+if (nrow(missing_coords) > 0) {
+
+  missing_coords |>
+    dplyr::distinct(
+      origin_country,
+      implementation_country,
+      origin_iso3,
+      dest_iso3
+    ) |>
+    print(n = 50)
+
+  cat("\nSample problematic rows:\n")
+
+  missing_coords |>
+    dplyr::select(
+      origin_country,
+      implementation_country,
+      origin_iso3,
+      dest_iso3,
+      lon_origin, lat_origin,
+      lon_dest, lat_dest
+    ) |>
+    head(10) |>
+    print()
+
+} else {
+
+  cat("\nNo problematic country pairs found.\n")
+}
+
+
+# =========================================================
+# 44.5 Create spatial LINESTRING network (final clean)
+# =========================================================
+
+# --- Ensure unique centroids per country
+world_centroids <- world_centroids |>
+  dplyr::filter(!is.na(iso3_clean)) |>
+  dplyr::group_by(iso3_clean) |>
+  dplyr::slice(1) |>
+  dplyr::ungroup()
+
+# --- Rebuild edges_geo with clean centroids
+edges_geo <- edges_iso |>
+  dplyr::left_join(
+    world_centroids |> dplyr::select(iso3_clean, lon, lat),
+    by = c("origin_iso3" = "iso3_clean")
+  ) |>
+  dplyr::rename(
+    lon_origin = lon,
+    lat_origin = lat
+  ) |>
+  dplyr::left_join(
+    world_centroids |> dplyr::select(iso3_clean, lon, lat),
+    by = c("dest_iso3" = "iso3_clean")
+  ) |>
+  dplyr::rename(
+    lon_dest = lon,
+    lat_dest = lat
+  )
+
+# --- Clean edges
+edges_geo_clean <- edges_geo |>
+  dplyr::filter(
+    !is.na(lon_origin),
+    !is.na(lat_origin),
+    !is.na(lon_dest),
+    !is.na(lat_dest)
+  )
+
+# --- Create LINESTRING geometries
+line_list <- purrr::pmap(
+  list(
+    edges_geo_clean$lon_origin,
+    edges_geo_clean$lat_origin,
+    edges_geo_clean$lon_dest,
+    edges_geo_clean$lat_dest
+  ),
+  function(lon1, lat1, lon2, lat2) {
+    matrix(
+      c(lon1, lat1,
+        lon2, lat2),
+      ncol = 2,
+      byrow = TRUE
+    )
+  }
+)
+
+geom <- sf::st_sfc(
+  lapply(line_list, sf::st_linestring),
+  crs = 4326
+)
+
+edges_sf <- sf::st_as_sf(edges_geo_clean, geometry = geom)
+
+# --- Fix geometry validity
+edges_sf <- sf::st_make_valid(edges_sf)
+
+# --- Final validation
+stopifnot(
+  nrow(edges_sf) == length(sf::st_geometry(edges_sf)),
+  all(sf::st_is_valid(edges_sf))
+)
+
+cat("\nSpatial network successfully created (clean + valid).\n")
+```
+
+
+```{r}
+
+library(geosphere)
+library(purrr)
+
+# Function to create great-circle curve between two points
+make_curve <- function(lon1, lat1, lon2, lat2) {
+  
+  # skip identical points (domestic flows → no curve)
+  if (lon1 == lon2 && lat1 == lat2) return(NULL)
+  
+  coords <- geosphere::gcIntermediate(
+    c(lon1, lat1),
+    c(lon2, lat2),
+    n = 50,
+    addStartEnd = TRUE,
+    breakAtDateLine = FALSE
+  )
+  
+  return(sf::st_linestring(coords))
+}
+
+# Build curved geometries
+curve_list <- purrr::pmap(
+  list(edges_sf$lon_origin, edges_sf$lat_origin,
+       edges_sf$lon_dest, edges_sf$lat_dest),
+  make_curve
+)
+
+# Remove NULLs (domestic flows)
+valid_idx <- which(!sapply(curve_list, is.null))
+
+edges_curved <- edges_sf[valid_idx, ]
+
+edges_curved_geom <- sf::st_sfc(curve_list[valid_idx], crs = 4326)
+
+edges_curved <- sf::st_as_sf(edges_curved, geometry = edges_curved_geom)
+
+edges_mid_arrows_df <- edges_curved |>
+  dplyr::mutate(
+    mx = (lon_origin + lon_dest) / 2,
+    my = (lat_origin + lat_dest) / 2,
+    
+    dx = (lon_dest - lon_origin),
+    dy = (lat_dest - lat_origin),
+    
+    length = sqrt(dx^2 + dy^2)
+  ) |>
+  dplyr::filter(length > 0) |>
+  dplyr::mutate(
+    ux = dx / length,
+    uy = dy / length,
+    
+    seg_len = 1.2,
+    
+    x_start = mx - ux * seg_len,
+    y_start = my - uy * seg_len,
+    x_end   = mx + ux * seg_len,
+    y_end   = my + uy * seg_len
+  )
+
+edges_curved_cross <- edges_curved |>
+  dplyr::filter(origin_iso3 != dest_iso3)
+
+edges_mid_arrows_cross <- edges_mid_arrows_df |>
+  dplyr::filter(origin_iso3 != dest_iso3)
+
+threshold_full  <- quantile(edges_curved$diffusion_count, 0.90, na.rm = TRUE)
+threshold_cross <- quantile(edges_curved_cross$diffusion_count, 0.90, na.rm = TRUE)
+
+edges_curved_top <- edges_curved |>
+  dplyr::filter(diffusion_count >= threshold_full)
+
+edges_curved_cross_top <- edges_curved_cross |>
+  dplyr::filter(diffusion_count >= threshold_cross)
+
+edges_mid_arrows_top <- edges_mid_arrows_df |>
+  dplyr::filter(diffusion_count >= threshold_full)
+
+edges_mid_arrows_cross_top <- edges_mid_arrows_cross |>
+  dplyr::filter(diffusion_count >= threshold_cross)
+
+edge_color  <- "grey50"
+arrow_color <- "#2C7FB8"
+
+ggplot() +
+  geom_sf(data = world_plot, fill = "grey95", color = "grey75", linewidth = 0.2) +
+  
+  geom_sf(
+    data = edges_curved,
+    aes(size = diffusion_count),
+    color = edge_color,
+    alpha = 0.35
+  ) +
+  
+  geom_segment(
+    data = edges_mid_arrows_df,
+    aes(x = x_start, y = y_start, xend = x_end, yend = y_end),
+    color = arrow_color,
+    linewidth = 0.6,
+    arrow = arrow(length = unit(0.10, "inches"), type = "closed")
+  ) +
+  
+  geom_point(data = nodes_all, aes(x = lon, y = lat), size = 1) +
+  
+  geom_text(
+    data = nodes_all,
+    aes(x = lon, y = lat, label = admin),
+    size = 2,
+    check_overlap = TRUE
+  ) +
+  
+  scale_size_continuous(range = c(0.2, 1.5)) +
+  
+  labs(
+    title = "Global Innovation Diffusion Network (Curved)",
+    subtitle = "All flows with midpoint directional arrows"
+  ) +
+  
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())
+
+ggplot() +
+  geom_sf(data = world_plot, fill = "grey95", color = "grey75", linewidth = 0.2) +
+  
+  geom_sf(
+    data = edges_curved_top,
+    aes(size = diffusion_count),
+    color = edge_color,
+    alpha = 0.7
+  ) +
+  
+  geom_segment(
+    data = edges_mid_arrows_top,
+    aes(x = x_start, y = y_start, xend = x_end, yend = y_end),
+    color = arrow_color,
+    linewidth = 0.7,
+    arrow = arrow(length = unit(0.12, "inches"), type = "closed")
+  ) +
+  
+  geom_point(data = nodes_all, aes(x = lon, y = lat), size = 1.5) +
+  
+  geom_text(
+    data = nodes_top,
+    aes(x = lon, y = lat, label = admin),
+    size = 3,
+    fontface = "bold",
+    check_overlap = TRUE
+  ) +
+  
+  scale_size_continuous(range = c(0.5, 2.5)) +
+  
+  labs(
+    title = "Major Diffusion Pathways (Curved)",
+    subtitle = "Top 10% flows with direction"
+  ) +
+  
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())
+
+ggplot() +
+  geom_sf(data = world_plot, fill = "grey95", color = "grey75", linewidth = 0.2) +
+  
+  geom_sf(
+    data = edges_curved_cross,
+    aes(size = diffusion_count),
+    color = edge_color,
+    alpha = 0.35
+  ) +
+  
+  geom_segment(
+    data = edges_mid_arrows_cross,
+    aes(x = x_start, y = y_start, xend = x_end, yend = y_end),
+    color = arrow_color,
+    linewidth = 0.6,
+    arrow = arrow(length = unit(0.10, "inches"), type = "closed")
+  ) +
+  
+  geom_point(data = nodes_cross, aes(x = lon, y = lat), size = 1) +
+  
+  geom_text(
+    data = nodes_cross,
+    aes(x = lon, y = lat, label = admin),
+    size = 2,
+    check_overlap = TRUE
+  ) +
+  
+  scale_size_continuous(range = c(0.2, 1.5)) +
+  
+  labs(
+    title = "Cross-Border Innovation Diffusion Network (Curved)",
+    subtitle = "Domestic flows removed"
+  ) +
+  
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())
+
+ggplot() +
+  geom_sf(data = world_plot, fill = "grey95", color = "grey75", linewidth = 0.2) +
+  
+  geom_sf(
+    data = edges_curved_cross_top,
+    aes(size = diffusion_count),
+    color = edge_color,
+    alpha = 0.8
+  ) +
+  
+  geom_segment(
+    data = edges_mid_arrows_cross_top,
+    aes(x = x_start, y = y_start, xend = x_end, yend = y_end),
+    color = arrow_color,
+    linewidth = 0.8,
+    arrow = arrow(length = unit(0.12, "inches"), type = "closed")
+  ) +
+  
+  geom_point(data = nodes_cross, aes(x = lon, y = lat), size = 1.5) +
+  
+  geom_text(
+    data = nodes_top,
+    aes(x = lon, y = lat, label = admin),
+    size = 3,
+    fontface = "bold",
+    check_overlap = TRUE
+  ) +
+  
+  scale_size_continuous(range = c(0.5, 2.5)) +
+  
+  labs(
+    title = "Major Cross-Border Innovation Corridors (Curved)",
+    subtitle = "Top 10% directional flows"
+  ) +
+  
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())
+```
+
+
+
+```{r}
+# =========================================================
+# 1. DISTANCE BETWEEN COUNTRIES (GREAT-CIRCLE)
+# =========================================================
+
+edges_analysis <- edges_sf |>
+  dplyr::mutate(
+    distance_km = geosphere::distHaversine(
+      matrix(c(lon_origin, lat_origin), ncol = 2),
+      matrix(c(lon_dest, lat_dest), ncol = 2)
+    ) / 1000
+  )
+
+# =========================================================
+# 2. LOG TRANSFORM (CRITICAL FOR SKEW)
+# =========================================================
+
+edges_analysis <- edges_analysis |>
+  dplyr::mutate(
+    log_distance  = log1p(distance_km),
+    log_diffusion = log1p(diffusion_count)
+  )
+
+# =========================================================
+# 3. DISTANCE MODEL
+# =========================================================
+
+model_distance <- lm(log_diffusion ~ log_distance, data = edges_analysis)
+summary(model_distance)
+
+# =========================================================
+# 4. DEFINE GLOBAL NORTH / SOUTH
+# (Minimal but defensible classification)
+# =========================================================
+
+north <- c(
+  "United States", "Canada", "United Kingdom", "Germany", "France",
+  "Norway", "Sweden", "Finland", "Denmark", "Netherlands",
+  "Australia", "New Zealand", "Japan", "South Korea",
+  "Switzerland", "Austria", "Belgium", "Ireland"
+)
+
+south <- setdiff(
+  unique(c(edges_analysis$origin_country, edges_analysis$implementation_country)),
+  north
+)
+
+# =========================================================
+# 5. FLOW TYPOLOGY (DIRECTIONAL STRUCTURE)
+# =========================================================
+
+edges_analysis <- edges_analysis |>
+  dplyr::mutate(
+    flow_type = dplyr::case_when(
+      origin_country %in% north & implementation_country %in% south ~ "North → South",
+      origin_country %in% south & implementation_country %in% north ~ "South → North",
+      origin_country %in% north & implementation_country %in% north ~ "North → North",
+      origin_country %in% south & implementation_country %in% south ~ "South → South",
+      TRUE ~ "Other"
+    )
+  )
+
+# =========================================================
+# 6. FLOW SUMMARY (FIXED — DROP GEOMETRY)
+# =========================================================
+
+flow_summary <- edges_analysis |>
+  sf::st_drop_geometry() |>
+  dplyr::group_by(flow_type) |>
+  dplyr::summarise(
+    mean_flow   = mean(diffusion_count),
+    median_flow = median(diffusion_count),
+    total_flow  = sum(diffusion_count),
+    n_edges     = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(desc(total_flow))
+
+print(flow_summary)
+
+# =========================================================
+# 7. SPATIAL LAG (ORIGIN-BASED)
+# =========================================================
+
+edges_analysis <- edges_analysis |>
+  dplyr::mutate(
+    origin_index = match(origin_iso3, world_stats$iso_a3),
+    lag_origin_activity = lag_origins[origin_index]
+  )
+
+# Check missing lag values
+sum(is.na(edges_analysis$lag_origin_activity))
+
+# =========================================================
+# 8. SPATIAL + DISTANCE MODEL
+# =========================================================
+
+model_spatial <- lm(
+  log_diffusion ~ log_distance + lag_origin_activity,
+  data = edges_analysis
+)
+
+summary(model_spatial)
+
+# =========================================================
+# 9. FULL MODEL (DISTANCE + DIRECTION + SPATIAL)
+# =========================================================
+
+model_full <- lm(
+  log_diffusion ~ log_distance + lag_origin_activity + flow_type,
+  data = edges_analysis
+)
+
+summary(model_full)
+
+
+# =========================================================
+# 10. CENTRALITY + SPATIAL AUTOCORRELATION (FULL FIX)
+# =========================================================
+
+# Step 1: Attach centrality
+centrality_world <- world_stats |>
+  dplyr::left_join(
+    centrality_cross |> dplyr::select(country, out_strength),
+    by = c("iso_a3" = "country")
+  ) |>
+  dplyr::mutate(
+    out_strength = dplyr::coalesce(out_strength, 0)
+  )
+
+# =========================================================
+# CRITICAL: Rebuild spatial weights to match current data
+# =========================================================
+
+# Recompute centroids from CURRENT world_stats
+world_points <- sf::st_point_on_surface(world_stats)
+
+# Project for stable distance computation
+world_points_proj <- sf::st_transform(world_points, 8857)
+
+coords <- sf::st_coordinates(world_points_proj)
+
+# Rebuild KNN
+knn_4 <- spdep::knearneigh(coords, k = 4)
+nb_4  <- spdep::knn2nb(knn_4)
+
+lw_4  <- spdep::nb2listw(nb_4, style = "W", zero.policy = TRUE)
+
+# =========================================================
+# Validation (must pass)
+# =========================================================
+
+stopifnot(nrow(centrality_world) == length(nb_4))
+
+# =========================================================
+# Moran's I
+# =========================================================
+
+moran_centrality <- spdep::moran.test(
+  centrality_world$out_strength,
+  lw_4,
+  zero.policy = TRUE
+)
+
+print(moran_centrality)
+
+# =========================================================
+# 11. COMMUNITY DETECTION (NETWORK STRUCTURE)
+# =========================================================
+
+comm <- igraph::cluster_louvain(
+  igraph::as_undirected(g_diffusion_cross, mode = "collapse")
+)
+
+community_df <- tibble::tibble(
+  country = names(comm$membership),
+  community = comm$membership
+)
+
+community_df |>
+  left_join(country_nodes, by = c("country" = "country")) |>
+  group_by(community) |>
+  summarise(countries = paste(country, collapse = ", "))
+
+# Inspect largest communities
+community_df |>
+  dplyr::count(community, sort = TRUE) |>
+  print(n = 20)
+
+# =========================================================
+# 12. INEQUALITY OF DIFFUSION (Gini coefficient)
+# =========================================================
+
+ineq_value <- ineq::Gini(edges_sf$diffusion_count)
+
+cat("\nGini coefficient of diffusion:", round(ineq_value, 3), "\n")
+
+community_roles <- centrality_cross |>
+  left_join(community_df, by = c("country" = "country")) |>
+  group_by(community) |>
+  summarise(
+    mean_out = mean(out_strength),
+    mean_in  = mean(in_strength),
+    .groups = "drop"
+  )
+
+```
+
+
+
+
